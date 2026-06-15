@@ -112,28 +112,29 @@ async function handleCommand(chat, text, user, api, db, messageId) {
 
     if (command === '/start' || command === '/help') {
         const richStartText = `
-# 📝 Telegram Rich Markdown Bot
+# 📝 Rich Markdown Bot
 
-Welcome! I am a formatting assistant.
+Welcome! This bot converts Markdown text or uploaded files into formatted messages.
 
-I convert your raw Markdown syntax or uploaded \`.md\` files into native rich messages.
+### 🛠 How to Use
+* **Private Chats:** Send raw Markdown text directly, and the bot will reply with the formatted version.
+* **Commands:** Use \`/markdown <text>\` to send formatted content.
+* **Files:** Upload any \`.md\` or \`.markdown\` file (up to 20MB) to render its content.
 
-### 🎨 Native Formatting Supported
-The bot fully supports the telegram rich messages syntax. For more info on what is supported visit [Rich messages](https://core.telegram.org/bots/api#rich-messages).
+### ➡️ RTL (Right-to-Left) Support
+To render text in RTL layout:
+- Place \`rtl\` on the very first line of your message or file.
+- Alternatively, enable it globally via settings.
 
-### ➡️ Right-to-Left (RTL) Support
-To format your text in right-to-left orientation, place \`rtl\` on the very first line of your input or uploaded file. The bot will automatically configure RTL alignment and remove that directive line.
+### ⚡ Inline Mode
+Render formatting on the go in any chat by typing:
+\`@${botName} <your markdown>\`
 
 ### ⚙️ Settings
-Control bot behaviors such as deleting your input messages by typing \`/settings\`.
-
-### ⚡️ Inline Previewing
-You can use this bot's **Inline Mode** globally.
-
-Type \`@${botName} <markdown>\` in any chat to instantly send the rendered card. (limited to 256 characters)
-
-### 📂 File Support
-You can upload a \`.md\` document directly to this chat, and I will parse and display its content.
+Configure your preferences with the \`/settings\` command:
+- Automatically delete your raw messages after formatting.
+  - Always enabled in channels.
+- Set RTL alignment as your default option.
 
 <tg-math-block>\\begin{gather}\\text{Developed by}\\\\\\text{\\@MSarabi}\\end{gather}</tg-math-block>
 `;
