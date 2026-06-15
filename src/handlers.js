@@ -89,8 +89,7 @@ Type \`@${botName} <markdown>\` in any chat to instantly send the rendered card.
 ### 📂 File Support
 You can upload a \`.md\` document directly to this chat, and I will parse and display its content.
 
-> Developed by
-> > @MSarabi
+<tg-math-block>\\begin{gather}\\text{Developed by}\\\\\\text{\\@MSarabi}\\end{gather}</tg-math-block>
 `;
 
         try {
