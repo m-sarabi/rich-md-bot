@@ -1,5 +1,6 @@
 import {TelegramAPI} from './telegram';
 import {getUserMention, parseRtlDirective} from './utils';
+import {getUserSettings, upsertUserSettings, toggleDeleteSetting} from './db';
 
 async function handleWebhook(request, env) {
     try {
@@ -11,7 +12,7 @@ async function handleWebhook(request, env) {
         const api = new TelegramAPI(env.BOT_TOKEN);
 
         if (update.message) {
-            await handleMessageUpdate(update.message, api);
+            await handleMessageUpdate(update.message, api, env.DB);
         } else if (update.inline_query) {
             await handleInlineQueryUpdate(update.inline_query, api);
         }
@@ -21,18 +22,24 @@ async function handleWebhook(request, env) {
     return new Response('OK', {status: 200});
 }
 
-async function handleMessageUpdate(message, api) {
+async function handleMessageUpdate(message, api, db) {
     if (message.from?.is_bot) return;
     const chat = message.chat;
+    const user = message.from || {};
     const userMention = getUserMention(message);
+
+    // Ensure we register the user's initial state if they do not exist
+    if (user.id && db) {
+        await upsertUserSettings(db, user.id, user.username || '');
+    }
 
     let markdownText;
 
-    // Markdown files
     if (message.document) {
         const file = message.document;
         const fileName = file.file_name || '';
         const fileSize = file.file_size;
+
         // If file size is larger than 20MB, send a message that file is too big
         if (fileSize > 20 * 1024 * 1024) {
             await api.sendMessage(chat.id, `Sorry ${userMention}, the file is too large. The maximum size allowed is 20MB.`);
@@ -48,24 +55,36 @@ async function handleMessageUpdate(message, api) {
         }
     } else if (message.text) {
         const text = message.text.trim();
-        const commands = ['/start', '/help', '/markdown'];
+
+        const commands = ['/start', '/help', '/markdown', '/settings'];
         if (commands.some(command => text.startsWith(command))) {
-            await handleCommand(chat.id, text, userMention, api);
+            await handleCommand(chat, text, user, api, db);
             return;
         } else if (chat.type === 'private') {
             markdownText = text;
         }
     }
-    await processMarkdown(chat.id, markdownText.trim(), userMention, api);
+
+    if (markdownText) {
+        await processMarkdown(chat.id, markdownText.trim(), userMention, api);
+
+        // Delete original message if enabled
+        if (db && user.id) {
+            const settings = await getUserSettings(db, user.id);
+            if (settings && settings.delete_original === 1) {
+                await api.deleteMessage(chat.id, message.message_id);
+            }
+        }
+    }
 }
 
-async function handleCommand(chatId, text, userMention, api) {
+async function handleCommand(chat, text, user, api, db) {
     const spaceIndex = text.indexOf(' ');
     let command = (spaceIndex === -1 ? text : text.substring(0, spaceIndex)).toLowerCase();
     if (command.includes('@')) command = command.split('@')[0];
     const args = spaceIndex === -1 ? '' : text.substring(spaceIndex + 1).trim();
     const botName = await api.getMe().then(bot => bot.result.username);
-
+    const userMention = getUserMention({ chat, from: user });
 
     if (command === '/start' || command === '/help') {
         const richStartText = `
@@ -81,6 +100,9 @@ The bot fully supports the telegram rich messages syntax. For more info on what 
 ### ➡️ Right-to-Left (RTL) Support
 To format your text in right-to-left orientation, place \`rtl\` on the very first line of your input or uploaded file. The bot will automatically configure RTL alignment and remove that directive line.
 
+### ⚙️ Settings
+Control bot behaviors such as deleting your input messages by typing \`/settings\`.
+
 ### ⚡️ Inline Previewing
 You can use this bot's **Inline Mode** globally.
 
@@ -93,14 +115,36 @@ You can upload a \`.md\` document directly to this chat, and I will parse and di
 `;
 
         try {
-            await api.sendRichMessage(chatId, richStartText);
+            await api.sendRichMessage(chat.id, richStartText);
         } catch (error) {
             console.error('Failed to dispatch start message:', error);
             const fallbackText = `${userMention}\n\nWelcome!\n\nSend me raw markdown text or upload a \`.md\` file in private to generate rich messages.`;
-            await api.sendRichMessage(chatId, fallbackText);
+            await api.sendRichMessage(chat.id, fallbackText);
         }
     } else if (command === '/markdown') {
-        await processMarkdown(chatId, args, userMention, api);
+        await processMarkdown(chat.id, args, userMention, api);
+    } else if (command === '/settings') {
+        if (!db) {
+            await api.sendMessage(chat.id, 'Database configurations are currently unavailable.');
+            return;
+        }
+
+        if (args.toLowerCase() === 'toggle') {
+            const newValue = await toggleDeleteSetting(db, user.id, user.username || '');
+            const statusText = newValue === 1 ? 'ENABLED' : 'DISABLED';
+            await api.sendMessage(chat.id, `**Updated**. Delete original message: *${statusText}*.`, {parse_mode: 'MarkdownV2'});
+        } else {
+            const current = await getUserSettings(db, user.id);
+            const statusText = current && current.delete_original === 1 ? 'ENABLED' : 'DISABLED';
+            const settingsMessage = `
+Delete original message: \`${statusText}\`
+_(When enabled, If bot has permission, it will delete the original message.)_
+
+To toggle this setting, send:
+\`/settings toggle\`
+`;
+            await api.sendMessage(chat.id, settingsMessage, {parse_mode: 'MarkdownV2'});
+        }
     }
 }
 
@@ -145,7 +189,6 @@ async function handleInlineQueryUpdate(inlineQuery, api) {
         console.error('Error returning inline query output:', error);
     }
 }
-
 
 async function processMarkdown(chatId, markdownText, userMention, api) {
     const {isRtl, cleanedText} = parseRtlDirective(markdownText);

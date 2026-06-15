@@ -77,6 +77,17 @@ class TelegramAPI {
         return this.request('getMe');
     }
 
+    async deleteMessage(chatId, messageId) {
+        try {
+            return await this.request('deleteMessage', {
+                chat_id: chatId,
+                message_id: messageId,
+            });
+        } catch (error) {
+            console.error(`Failed to delete message ${messageId} in chat ${chatId}:`, error);
+            return null;
+        }
+    }
 }
 
 export {TelegramAPI, TelegramError};
