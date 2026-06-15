@@ -15,7 +15,7 @@ export function parseRtlDirective(text) {
 
 export function getUserMention(message) {
     const chat = message.chat;
-    if (chat.type === 'private') {
+    if (chat.type === 'private' || chat.type === 'channel') {
         return '';
     }
     const fromUser = message.from || {};

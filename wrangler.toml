@@ -3,6 +3,6 @@ main = "src/index.js"
 compatibility_date = "2026-06-14"
 
 [[d1_databases]]
-binding = "richmdbot_db"
+binding = "DB"
 database_name = "richmdbot_db"
 database_id = "86ce4d1a-dfc0-441e-b91b-10929d5469b9"

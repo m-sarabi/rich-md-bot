@@ -1,6 +1,6 @@
 import {TelegramAPI} from './telegram';
 import {getUserMention, parseRtlDirective} from './utils';
-import {getUserSettings, upsertUserSettings, toggleDeleteSetting} from './db';
+import {getUserSettings, upsertUserSettings, toggleSetting} from './db';
 
 async function handleWebhook(request, env) {
     try {
@@ -13,6 +13,8 @@ async function handleWebhook(request, env) {
 
         if (update.message) {
             await handleMessageUpdate(update.message, api, env.DB);
+        } else if (update.channel_post) {
+            await handleMessageUpdate(update.channel_post, api, env.DB);
         } else if (update.inline_query) {
             await handleInlineQueryUpdate(update.inline_query, api);
         }
@@ -28,9 +30,8 @@ async function handleMessageUpdate(message, api, db) {
     const user = message.from || {};
     const userMention = getUserMention(message);
 
-    // Ensure we register the user's initial state if they do not exist
     if (user.id && db) {
-        await upsertUserSettings(db, user.id, user.username || '');
+        await upsertUserSettings(db, user.id, user);
     }
 
     let markdownText;
@@ -55,10 +56,9 @@ async function handleMessageUpdate(message, api, db) {
         }
     } else if (message.text) {
         const text = message.text.trim();
-
         const commands = ['/start', '/help', '/markdown', '/settings'];
         if (commands.some(command => text.startsWith(command))) {
-            await handleCommand(chat, text, user, api, db);
+            await handleCommand(chat, text, user, api, db, message.message_id);
             return;
         } else if (chat.type === 'private') {
             markdownText = text;
@@ -66,25 +66,49 @@ async function handleMessageUpdate(message, api, db) {
     }
 
     if (markdownText) {
-        await processMarkdown(chat.id, markdownText.trim(), userMention, api);
+        let isDefaultRtl = false;
+        let isDeleteOriginal = false;
 
-        // Delete original message if enabled
-        if (db && user.id) {
+        if (chat.type === 'channel') {
+            isDeleteOriginal = true;
+        } else if (db && user.id) {
             const settings = await getUserSettings(db, user.id);
-            if (settings && settings.delete_original === 1) {
-                await api.deleteMessage(chat.id, message.message_id);
+            if (settings) {
+                isDefaultRtl = settings.default_rtl === 1;
+                isDeleteOriginal = settings.delete_original === 1;
             }
+        }
+
+        let {isRtl, cleanedText} = parseRtlDirective(markdownText);
+        if (isDefaultRtl) {
+            isRtl = true;
+        }
+
+        // Process markdown with the final settings
+        const finalMarkdownText = userMention ? `${userMention}\n\n${cleanedText}` : cleanedText;
+
+        try {
+            await api.sendRichMessage(chat.id, finalMarkdownText, isRtl);
+        } catch (error) {
+            console.error('Error during rich message rendering:', error);
+            const errorDetails = error.description || 'Invalid syntax';
+            const errorMsg = `${userMention}\n\n⚠️ *Markdown Parsing Error*\n\nTelegram was unable to parse the markdown syntax.\n\n*Error details:* \`${errorDetails}\``;
+            await api.sendMessage(chat.id, errorMsg, {parse_mode: 'MarkdownV2'});
+        }
+
+        if (isDeleteOriginal) {
+            await api.deleteMessage(chat.id, message.message_id);
         }
     }
 }
 
-async function handleCommand(chat, text, user, api, db) {
+async function handleCommand(chat, text, user, api, db, messageId) {
     const spaceIndex = text.indexOf(' ');
     let command = (spaceIndex === -1 ? text : text.substring(0, spaceIndex)).toLowerCase();
     if (command.includes('@')) command = command.split('@')[0];
     const args = spaceIndex === -1 ? '' : text.substring(spaceIndex + 1).trim();
     const botName = await api.getMe().then(bot => bot.result.username);
-    const userMention = getUserMention({ chat, from: user });
+    const userMention = getUserMention({chat, from: user});
 
     if (command === '/start' || command === '/help') {
         const richStartText = `
@@ -113,7 +137,6 @@ You can upload a \`.md\` document directly to this chat, and I will parse and di
 
 <tg-math-block>\\begin{gather}\\text{Developed by}\\\\\\text{\\@MSarabi}\\end{gather}</tg-math-block>
 `;
-
         try {
             await api.sendRichMessage(chat.id, richStartText);
         } catch (error) {
@@ -123,27 +146,45 @@ You can upload a \`.md\` document directly to this chat, and I will parse and di
         }
     } else if (command === '/markdown') {
         await processMarkdown(chat.id, args, userMention, api);
+        if (chat.type === 'channel' && messageId) {
+            await api.deleteMessage(chat.id, messageId);
+        } else if (db && user.id && messageId) {
+            const settings = await getUserSettings(db, user.id);
+            if (settings && settings.delete_original === 1) {
+                await api.deleteMessage(chat.id, messageId);
+            }
+        }
     } else if (command === '/settings') {
         if (!db) {
             await api.sendMessage(chat.id, 'Database configurations are currently unavailable.');
             return;
         }
 
-        if (args.toLowerCase() === 'toggle') {
-            const newValue = await toggleDeleteSetting(db, user.id, user.username || '');
+        if (args === 'delete') {
+            const newValue = await toggleSetting(db, user.id, user, 'delete_original');
             const statusText = newValue === 1 ? 'ENABLED' : 'DISABLED';
-            await api.sendMessage(chat.id, `**Updated**. Delete original message: *${statusText}*.`, {parse_mode: 'MarkdownV2'});
+            await api.sendMessage(chat.id, `Settings updated: *Delete original message* is now *${statusText}*.`, {parse_mode: 'Markdown'});
+        } else if (args === 'rtl') {
+            const newValue = await toggleSetting(db, user.id, user, 'default_rtl');
+            const statusText = newValue === 1 ? 'ENABLED' : 'DISABLED';
+            await api.sendMessage(chat.id, `Settings updated: *Default RTL alignment* is now *${statusText}*.`, {parse_mode: 'Markdown'});
         } else {
             const current = await getUserSettings(db, user.id);
-            const statusText = current && current.delete_original === 1 ? 'ENABLED' : 'DISABLED';
-            const settingsMessage = `
-Delete original message: \`${statusText}\`
-_(When enabled, If bot has permission, it will delete the original message.)_
+            const deleteStatus = current && current.delete_original === 1 ? 'ENABLED' : 'DISABLED';
+            const rtlStatus = current && current.default_rtl === 1 ? 'ENABLED' : 'DISABLED';
 
-To toggle this setting, send:
-\`/settings toggle\`
+            const settingsMessage = `
+⚙️ **Settings**
+
+1. *Delete original message:* \`${deleteStatus}\`
+   - Automatically delete your raw message text after rendering
+     - Toggle: \`/settings delete\`
+
+2. *Default RTL:* \`${rtlStatus}\`
+   - Assume all messages are Right-to-Left aligned by default
+     - Toggle: \`/settings rtl\`
 `;
-            await api.sendMessage(chat.id, settingsMessage, {parse_mode: 'MarkdownV2'});
+            await api.sendRichMessage(chat.id, settingsMessage);
         }
     }
 }
