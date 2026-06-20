@@ -25,6 +25,7 @@ async function handleWebhook(request, env) {
 }
 
 async function handleMessageUpdate(message, api, db) {
+    console.log('Received message:', message);
     if (message.from?.is_bot) return;
     const chat = message.chat;
     const user = message.from || {};
@@ -58,7 +59,7 @@ async function handleMessageUpdate(message, api, db) {
         const text = message.text.trim();
         const commands = ['/start', '/help', '/markdown', '/settings'];
         if (commands.some(command => text.startsWith(command))) {
-            await handleCommand(chat, text, user, api, db, message.message_id);
+            await handleCommand(chat, text, user, api, db, message);
             return;
         } else if (chat.type === 'private') {
             markdownText = text;
@@ -68,6 +69,7 @@ async function handleMessageUpdate(message, api, db) {
     if (markdownText) {
         let isDefaultRtl = false;
         let isDeleteOriginal = false;
+        let isMentionEnabled = true;
 
         if (chat.type === 'channel') {
             isDeleteOriginal = true;
@@ -76,6 +78,7 @@ async function handleMessageUpdate(message, api, db) {
             if (settings) {
                 isDefaultRtl = settings.default_rtl === 1;
                 isDeleteOriginal = settings.delete_original === 1;
+                isMentionEnabled = settings.mention === 1;
             }
         }
 
@@ -84,8 +87,8 @@ async function handleMessageUpdate(message, api, db) {
             isRtl = true;
         }
 
-        // Process markdown with the final settings
-        const finalMarkdownText = userMention ? `${userMention}\n\n${cleanedText}` : cleanedText;
+        const activeMention = isMentionEnabled ? userMention : '';
+        const finalMarkdownText = activeMention ? `${activeMention}\n\n${cleanedText}` : cleanedText;
 
         try {
             await api.sendRichMessage(chat.id, finalMarkdownText, isRtl);
@@ -102,7 +105,8 @@ async function handleMessageUpdate(message, api, db) {
     }
 }
 
-async function handleCommand(chat, text, user, api, db, messageId) {
+async function handleCommand(chat, text, user, api, db, message) {
+    const messageId = message.message_id;
     const spaceIndex = text.indexOf(' ');
     let command = (spaceIndex === -1 ? text : text.substring(0, spaceIndex)).toLowerCase();
     if (command.includes('@')) command = command.split('@')[0];
@@ -146,7 +150,14 @@ Configure your preferences with the \`/settings\` command:
             await api.sendRichMessage(chat.id, fallbackText);
         }
     } else if (command === '/markdown') {
-        await processMarkdown(chat.id, args, userMention, api);
+        let activeMention = userMention;
+        if (db && user.id) {
+            const settings = await getUserSettings(db, user.id);
+            if (settings && settings.mention === 0) {
+                activeMention = '';
+            }
+        }
+        await processMarkdown(chat, args, activeMention, message, api);
         if (chat.type === 'channel' && messageId) {
             await api.deleteMessage(chat.id, messageId);
         } else if (db && user.id && messageId) {
@@ -155,7 +166,7 @@ Configure your preferences with the \`/settings\` command:
                 await api.deleteMessage(chat.id, messageId);
             }
         }
-    } else if (command === '/settings') {
+    } else if (chat.type === 'private' && command === '/settings') {
         if (!db) {
             await api.sendMessage(chat.id, 'Database configurations are currently unavailable.');
             return;
@@ -164,15 +175,20 @@ Configure your preferences with the \`/settings\` command:
         if (args === 'delete') {
             const newValue = await toggleSetting(db, user.id, user, 'delete_original');
             const statusText = newValue === 1 ? 'ENABLED' : 'DISABLED';
-            await api.sendMessage(chat.id, `Settings updated: *Delete original message* is now *${statusText}*.`, {parse_mode: 'Markdown'});
+            await api.sendMessage(chat.id, `Settings updated: <b>Delete original message</b> is now <b>${statusText}</b>.`, {parse_mode: 'HTML'});
         } else if (args === 'rtl') {
             const newValue = await toggleSetting(db, user.id, user, 'default_rtl');
             const statusText = newValue === 1 ? 'ENABLED' : 'DISABLED';
-            await api.sendMessage(chat.id, `Settings updated: *Default RTL alignment* is now *${statusText}*.`, {parse_mode: 'Markdown'});
+            await api.sendMessage(chat.id, `Settings updated: <b>Default RTL alignment</b> is now <b>${statusText}</b>.`, {parse_mode: 'HTML'});
+        } else if (args === 'mention') {
+            const newValue = await toggleSetting(db, user.id, user, 'mention');
+            const statusText = newValue === 1 ? 'ENABLED' : 'DISABLED';
+            await api.sendMessage(chat.id, `Settings updated: <b>Group mentions</b> is now <b>${statusText}</b>.`, {parse_mode: 'HTML'});
         } else {
             const current = await getUserSettings(db, user.id);
             const deleteStatus = current && current.delete_original === 1 ? 'ENABLED' : 'DISABLED';
             const rtlStatus = current && current.default_rtl === 1 ? 'ENABLED' : 'DISABLED';
+            const mentionStatus = current && current.mention === 1 ? 'ENABLED' : 'DISABLED';
 
             const settingsMessage = `
 ⚙️ **Settings**
@@ -184,6 +200,10 @@ Configure your preferences with the \`/settings\` command:
 2. *Default RTL:* \`${rtlStatus}\`
    - Assume all messages are Right-to-Left aligned by default
      - Toggle: \`/settings rtl\`
+
+3. *Default mention:* \`${mentionStatus}\`
+   - To be mentioned in groups on the first line
+     - Toggle: \`/settings mention\`
 `;
             await api.sendRichMessage(chat.id, settingsMessage);
         }
@@ -232,26 +252,30 @@ async function handleInlineQueryUpdate(inlineQuery, api) {
     }
 }
 
-async function processMarkdown(chatId, markdownText, userMention, api) {
+async function processMarkdown(chat, markdownText, userMention, message, api) {
     const {isRtl, cleanedText} = parseRtlDirective(markdownText);
+    const chatId = chat.id;
+    const options = {};
+    if (message.message_thread_id) options.message_thread_id = message.message_thread_id;
 
     if (cleanedText.length === 0) {
         const hint = `${userMention}\n\nPlease provide some Markdown text or upload a \`.md\` file.\n\n*Example to try:* \`> <b>Quadratic Equation Solutions: <tg-math-block>\\frac{-b\\pm\\sqrt{b^2-4ac}}{2a}</tg-math-block>\``;
-        await api.sendRichMessage(chatId, hint);
+        await api.sendRichMessage(chatId, hint, false, options);
         return;
     }
 
     const finalMarkdownText = userMention ? `${userMention}\n\n${cleanedText}` : cleanedText;
 
     try {
-        await api.sendRichMessage(chatId, finalMarkdownText, isRtl);
+        await api.sendRichMessage(chatId, finalMarkdownText, isRtl, options);
     } catch (error) {
         console.error('Error during rich message rendering:', error);
 
         const errorDetails = error.description || 'Invalid syntax';
         const errorMsg = `${userMention}\n\n⚠️ *Markdown Parsing Error*\n\nTelegram was unable to parse the markdown syntax.\n\n*Error details:* \`${errorDetails}\``;
 
-        await api.sendMessage(chatId, errorMsg, {parse_mode: 'MarkdownV2'});
+        options.parse_mode = 'MarkdownV2';
+        await api.sendMessage(chatId, errorMsg, options);
     }
 }
 
