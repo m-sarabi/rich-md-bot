@@ -31,6 +31,12 @@ async function handleMessageUpdate(message, api, db) {
     const user = message.from || {};
     const userMention = getUserMention(message);
 
+    // Track thread/forum context
+    const options = {};
+    if (message.message_thread_id) {
+        options.message_thread_id = message.message_thread_id;
+    }
+
     if (user.id && db) {
         await upsertUserSettings(db, user.id, user);
     }
@@ -44,7 +50,7 @@ async function handleMessageUpdate(message, api, db) {
 
         // If file size is larger than 20MB, send a message that file is too big
         if (fileSize > 20 * 1024 * 1024) {
-            await api.sendMessage(chat.id, `Sorry ${userMention}, the file is too large. The maximum size allowed is 20MB.`);
+            await api.sendMessage(chat.id, `Sorry ${userMention}, the file is too large. The maximum size allowed is 20MB.`, options);
             return;
         }
         if (fileName.toLowerCase().endsWith('.md') || fileName.toLowerCase().endsWith('.markdown') || file.mime_type === 'text/markdown') {
@@ -52,7 +58,10 @@ async function handleMessageUpdate(message, api, db) {
                 markdownText = await api.downloadFile(file.file_id);
             } catch (err) {
                 console.error('Error downloading file:', err);
-                await api.sendMessage(chat.id, '`⚠️ *File Download Error*\nCould not retrieve the content of your Markdown file.`', {parse_mode: 'MarkdownV2'});
+                await api.sendMessage(chat.id, '`⚠️ *File Download Error*\nCould not retrieve the content of your Markdown file.`', {
+                    parse_mode: 'MarkdownV2',
+                    ...options
+                });
             }
         }
     } else if (message.text) {
@@ -91,12 +100,15 @@ async function handleMessageUpdate(message, api, db) {
         const finalMarkdownText = activeMention ? `${activeMention}\n\n${cleanedText}` : cleanedText;
 
         try {
-            await api.sendRichMessage(chat.id, finalMarkdownText, isRtl);
+            await api.sendRichMessage(chat.id, finalMarkdownText, isRtl, options);
         } catch (error) {
             console.error('Error during rich message rendering:', error);
             const errorDetails = error.description || 'Invalid syntax';
             const errorMsg = `${userMention}\n\n⚠️ *Markdown Parsing Error*\n\nTelegram was unable to parse the markdown syntax.\n\n*Error details:* \`${errorDetails}\``;
-            await api.sendMessage(chat.id, errorMsg, {parse_mode: 'MarkdownV2'});
+            await api.sendMessage(chat.id, errorMsg, {
+                parse_mode: 'MarkdownV2',
+                ...options
+            });
         }
 
         if (isDeleteOriginal) {
@@ -113,6 +125,11 @@ async function handleCommand(chat, text, user, api, db, message) {
     const args = spaceIndex === -1 ? '' : text.substring(spaceIndex + 1).trim();
     const botName = await api.getMe().then(bot => bot.result.username);
     const userMention = getUserMention({chat, from: user});
+
+    const options = {};
+    if (message.message_thread_id) {
+        options.message_thread_id = message.message_thread_id;
+    }
 
     if (command === '/start' || command === '/help') {
         const richStartText = `
@@ -143,11 +160,11 @@ Configure your preferences with the \`/settings\` command:
 <tg-math-block>\\begin{gather}\\text{Developed by}\\\\\\text{\\@MSarabi}\\end{gather}</tg-math-block>
 `;
         try {
-            await api.sendRichMessage(chat.id, richStartText);
+            await api.sendRichMessage(chat.id, richStartText, false, options);
         } catch (error) {
             console.error('Failed to dispatch start message:', error);
             const fallbackText = `${userMention}\n\nWelcome!\n\nSend me raw markdown text or upload a \`.md\` file in private to generate rich messages.`;
-            await api.sendRichMessage(chat.id, fallbackText);
+            await api.sendRichMessage(chat.id, fallbackText, false, options);
         }
     } else if (command === '/markdown') {
         let activeMention = userMention;
