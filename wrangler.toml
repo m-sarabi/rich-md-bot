@@ -6,3 +6,18 @@ compatibility_date = "2026-06-14"
 binding = "DB"
 database_name = "richmdbot_db"
 database_id = "86ce4d1a-dfc0-441e-b91b-10929d5469b9"
+
+[observability]
+enabled = false
+head_sampling_rate = 1
+
+[observability.logs]
+enabled = true
+head_sampling_rate = 1
+persist = true
+invocation_logs = true
+
+[observability.traces]
+enabled = false
+persist = true
+head_sampling_rate = 1
