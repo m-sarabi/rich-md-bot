@@ -12,9 +12,9 @@ async function handleWebhook(request, env) {
         const api = new TelegramAPI(env.BOT_TOKEN);
 
         if (update.message) {
-            await handleMessageUpdate(update.message, api, env.DB);
+            await handleMessageUpdate(update.message, api, env.DB, request);
         } else if (update.channel_post) {
-            await handleMessageUpdate(update.channel_post, api, env.DB);
+            await handleMessageUpdate(update.channel_post, api, env.DB, request);
         } else if (update.inline_query) {
             await handleInlineQueryUpdate(update.inline_query, api);
         }
@@ -24,7 +24,7 @@ async function handleWebhook(request, env) {
     return new Response('OK', {status: 200});
 }
 
-async function handleMessageUpdate(message, api, db) {
+async function handleMessageUpdate(message, api, db, request) {
     console.log('Received message:', message);
     if (message.from?.is_bot) return;
     const chat = message.chat;
@@ -46,7 +46,18 @@ async function handleMessageUpdate(message, api, db) {
     if (message.document) {
         const file = message.document;
         const fileName = file.file_name || '';
-        const fileSize = file.file_size;
+        const fileSize = file.file_size || 0;
+        const fileInfo = await api.request('getFile', {file_id: file.file_id});
+        if (!fileInfo.ok || !fileInfo.result?.file_path) {
+            throw new Error('Telegram getFile returned an invalid or empty path.');
+        }
+        const downloadUrl = `${api.fileUrl}/${fileInfo.result.file_path}`;
+
+        const requestUrl = new URL(request.url);
+        const baseUrl = requestUrl.origin;
+        const proxyUrl = `${baseUrl}/file/${file.file_id}${fileName ? `?filename=${encodeURIComponent(fileName)}` : ''}`;
+
+        await api.sendRichMessage(chat.id, `Proxy URL:\n<code>${proxyUrl}</code>`, false, options);
 
         // If file size is larger than 20MB, send a message that file is too big
         if (fileSize > 20 * 1024 * 1024) {
@@ -55,7 +66,7 @@ async function handleMessageUpdate(message, api, db) {
         }
         if (fileName.toLowerCase().endsWith('.md') || fileName.toLowerCase().endsWith('.markdown') || file.mime_type === 'text/markdown') {
             try {
-                markdownText = await api.downloadFile(file.file_id);
+                markdownText = await api.downloadFile(downloadUrl);
             } catch (err) {
                 console.error('Error downloading file:', err);
                 await api.sendMessage(chat.id, '`⚠️ *File Download Error*\nCould not retrieve the content of your Markdown file.`', {
@@ -296,4 +307,53 @@ async function processMarkdown(chat, markdownText, userMention, message, api) {
     }
 }
 
-export {handleWebhook};
+async function handleFileProxy(request, env) {
+    const url = new URL(request.url);
+    const fileId = url.pathname.split('/').pop();
+    if (!fileId) {
+        return new Response('File ID is missing', { status: 400 });
+    }
+
+    const filename = url.searchParams.get('filename');
+
+    try {
+        const api = new TelegramAPI(env.BOT_TOKEN);
+        const fileInfo = await api.request('getFile', { file_id: fileId });
+        if (!fileInfo.ok || !fileInfo.result?.file_path) {
+            return new Response('File not found', { status: 404 });
+        }
+
+        const downloadUrl = `${api.fileUrl}/${fileInfo.result.file_path}`;
+        const fileResponse = await fetch(downloadUrl);
+
+        if (!fileResponse.ok) {
+            return new Response('Error retrieving file from Telegram', { status: fileResponse.status });
+        }
+
+        const responseHeaders = new Headers();
+        const contentType = fileResponse.headers.get('Content-Type');
+        if (contentType) {
+            responseHeaders.set('Content-Type', contentType);
+        }
+
+        if (filename) {
+            const safeFilename = filename.replace(/"/g, '\\"');
+            responseHeaders.set(
+                'Content-Disposition',
+                `attachment; filename="${safeFilename}"; filename*=UTF-8''${encodeURIComponent(filename)}`
+            );
+        }
+
+        responseHeaders.set('Cache-Control', 'public, max-age=3600');
+
+        return new Response(fileResponse.body, {
+            status: 200,
+            headers: responseHeaders,
+        });
+    } catch (error) {
+        console.error('File proxy error:', error);
+        return new Response('Internal Server Error', { status: 500 });
+    }
+}
+
+export {handleWebhook, handleFileProxy};

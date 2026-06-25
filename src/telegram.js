@@ -58,13 +58,8 @@ class TelegramAPI {
         });
     }
 
-    async downloadFile(fileId) {
-        const file = await this.request('getFile', {file_id: fileId});
-        if (!file.ok || !file.result?.file_path) {
-            throw new Error('Telegram getFile returned an invalid or empty path.');
-        }
+    async downloadFile(downloadUrl) {
 
-        const downloadUrl = `${this.fileUrl}/${file.result.file_path}`;
         const response = await fetch(downloadUrl);
         if (!response.ok) {
             throw new Error(`Failed to retrieve file content: ${response.statusText}`);
