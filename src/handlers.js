@@ -156,6 +156,11 @@ Welcome! This bot converts Markdown text or uploaded files into formatted messag
 * **Commands:** Use \`/markdown <text>\` to send formatted content.
 * **Files:** Upload any \`.md\` or \`.markdown\` file (up to 20MB) to render its content.
 
+### 🖼 Inline Media (Proxy Links)
+When you upload a document, photo, or video, the bot replies with a **Proxy URL**. You can use this link to embed inline media inside your markdown:
+* **Images:** \`<img src="PROXY_URL" />\`
+* **Videos:** \`<video src="PROXY_URL" />\`
+
 ### ➡️ RTL (Right-to-Left) Support
 To render text in RTL layout:
 - Place \`rtl\` on the very first line of your message or file.
@@ -340,7 +345,6 @@ async function handleFileProxy(request, env) {
         let contentType = fileResponse.headers.get('Content-Type');
 
         if (filename) {
-            // Determine the actual mime type based on file extension
             const inferredMime = getMimeType(filename);
             if (!contentType || contentType === 'application/octet-stream' || inferredMime !== 'application/octet-stream') {
                 contentType = inferredMime;
