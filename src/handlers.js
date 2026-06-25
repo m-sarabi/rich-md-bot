@@ -1,5 +1,5 @@
 import {TelegramAPI} from './telegram';
-import {getUserMention, parseRtlDirective} from './utils';
+import {getUserMention, getUserMentionHtml, parseRtlDirective, getMimeType} from './utils';
 import {getUserSettings, upsertUserSettings, toggleSetting} from './db';
 
 async function handleWebhook(request, env) {
@@ -69,8 +69,8 @@ async function handleMessageUpdate(message, api, db, request) {
                 markdownText = await api.downloadFile(downloadUrl);
             } catch (err) {
                 console.error('Error downloading file:', err);
-                await api.sendMessage(chat.id, '`⚠️ *File Download Error*\nCould not retrieve the content of your Markdown file.`', {
-                    parse_mode: 'MarkdownV2',
+                await api.sendMessage(chat.id, '⚠️ <b>File Download Error</b>\nCould not retrieve the content of your Markdown file.', {
+                    parse_mode: 'HTML',
                     ...options
                 });
             }
@@ -115,9 +115,12 @@ async function handleMessageUpdate(message, api, db, request) {
         } catch (error) {
             console.error('Error during rich message rendering:', error);
             const errorDetails = error.description || 'Invalid syntax';
-            const errorMsg = `${userMention}\n\n⚠️ *Markdown Parsing Error*\n\nTelegram was unable to parse the markdown syntax.\n\n*Error details:* \`${errorDetails}\``;
+            const htmlMention = getUserMentionHtml(message);
+            const mentionPrefix = htmlMention ? `${htmlMention}\n\n` : '';
+            const escapedDetails = errorDetails.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+            const errorMsg = `${mentionPrefix}⚠️ <b>Markdown Parsing Error</b>\n\nTelegram was unable to parse the markdown syntax.\n\n<b>Error details:</b> <code>${escapedDetails}</code>`;
             await api.sendMessage(chat.id, errorMsg, {
-                parse_mode: 'MarkdownV2',
+                parse_mode: 'HTML',
                 ...options
             });
         }
@@ -300,9 +303,12 @@ async function processMarkdown(chat, markdownText, userMention, message, api) {
         console.error('Error during rich message rendering:', error);
 
         const errorDetails = error.description || 'Invalid syntax';
-        const errorMsg = `${userMention}\n\n⚠️ *Markdown Parsing Error*\n\nTelegram was unable to parse the markdown syntax.\n\n*Error details:* \`${errorDetails}\``;
+        const htmlMention = getUserMentionHtml(message);
+        const mentionPrefix = htmlMention ? `${htmlMention}\n\n` : '';
+        const escapedDetails = errorDetails.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+        const errorMsg = `${mentionPrefix}⚠️ <b>Markdown Parsing Error</b>\n\nTelegram was unable to parse the markdown syntax.\n\n<b>Error details:</b> <code>${escapedDetails}</code>`;
 
-        options.parse_mode = 'MarkdownV2';
+        options.parse_mode = 'HTML';
         await api.sendMessage(chatId, errorMsg, options);
     }
 }
@@ -331,17 +337,24 @@ async function handleFileProxy(request, env) {
         }
 
         const responseHeaders = new Headers();
-        const contentType = fileResponse.headers.get('Content-Type');
-        if (contentType) {
-            responseHeaders.set('Content-Type', contentType);
-        }
+        let contentType = fileResponse.headers.get('Content-Type');
 
         if (filename) {
+            // Determine the actual mime type based on file extension
+            const inferredMime = getMimeType(filename);
+            if (!contentType || contentType === 'application/octet-stream' || inferredMime !== 'application/octet-stream') {
+                contentType = inferredMime;
+            }
+
             const safeFilename = filename.replace(/"/g, '\\"');
             responseHeaders.set(
                 'Content-Disposition',
-                `attachment; filename="${safeFilename}"; filename*=UTF-8''${encodeURIComponent(filename)}`
+                `inline; filename="${safeFilename}"; filename*=UTF-8''${encodeURIComponent(filename)}`
             );
+        }
+
+        if (contentType) {
+            responseHeaders.set('Content-Type', contentType);
         }
 
         responseHeaders.set('Cache-Control', 'public, max-age=3600');
