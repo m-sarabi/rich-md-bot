@@ -157,9 +157,8 @@ Welcome! This bot converts Markdown text or uploaded files into formatted messag
 * **Files:** Upload any \`.md\` or \`.markdown\` file (up to 20MB) to render its content.
 
 ### 🖼 Inline Media (Proxy Links)
-When you upload a document, photo, or video, the bot replies with a **Proxy URL**. You can use this link to embed inline media inside your markdown:
-* **Images:** \`<img src="PROXY_URL" />\`
-* **Videos:** \`<video src="PROXY_URL" />\`
+When you upload a document, photo, or video, the bot replies with a **Proxy URL**. You can use this link to embed inline media inside your Markdown:
+* **Example:** \`<img src="PROXY_URL" />\`
 
 ### ➡️ RTL (Right-to-Left) Support
 To render text in RTL layout:
