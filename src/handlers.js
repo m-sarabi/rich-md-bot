@@ -53,12 +53,13 @@ async function handleMessageUpdate(message, api, db, request) {
             throw new Error('Telegram getFile returned an invalid or empty path.');
         }
         const downloadUrl = `${api.fileUrl}/${fileInfo.result.file_path}`;
+        if (chat.type === 'private') {
+            const requestUrl = new URL(request.url);
+            const baseUrl = requestUrl.origin;
+            const proxyUrl = `${baseUrl}/file/${file.file_id}${fileName ? `?filename=${encodeURIComponent(fileName)}` : ''}`;
 
-        const requestUrl = new URL(request.url);
-        const baseUrl = requestUrl.origin;
-        const proxyUrl = `${baseUrl}/file/${file.file_id}${fileName ? `?filename=${encodeURIComponent(fileName)}` : ''}`;
-
-        await api.sendRichMessage(chat.id, `Proxy URL:\n<code>${proxyUrl}</code>`, false, options);
+            await api.sendRichMessage(chat.id, `Proxy URL:\n<code>${proxyUrl}</code>`, false, options);
+        }
 
         // If file size is larger than 20MB, send a message that file is too big
         if (fileSize > 20 * 1024 * 1024) {
