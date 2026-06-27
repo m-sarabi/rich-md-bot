@@ -1,3 +1,5 @@
+import {getLocalFileId} from './utils';
+
 class TelegramError extends Error {
     constructor(method, status, responseBody) {
         const parsed = JSON.parse(responseBody);
@@ -10,9 +12,10 @@ class TelegramError extends Error {
 }
 
 class TelegramAPI {
-    constructor(token) {
+    constructor(token, localOrigin = null) {
         this.baseUrl = `https://api.telegram.org/bot${token}`;
         this.fileUrl = `https://api.telegram.org/file/bot${token}`;
+        this.localOrigin = localOrigin;
     }
 
     async request(method, payload = {}) {
@@ -26,6 +29,10 @@ class TelegramAPI {
             throw new TelegramError(method, response.status, errorText);
         }
         return await response.json();
+    }
+
+    async getFile(fileId) {
+        return this.request('getFile', {file_id: fileId});
     }
 
     async sendMessage(chatId, text, options = {}) {
@@ -59,6 +66,23 @@ class TelegramAPI {
     }
 
     async downloadFile(downloadUrl) {
+        const localFileId = getLocalFileId(downloadUrl, this.localOrigin);
+
+        if (localFileId) {
+            try {
+                const fileInfo = await this.getFile(localFileId);
+                if (fileInfo.ok && fileInfo.result?.file_path) {
+                    const directUrl = `${this.fileUrl}/${fileInfo.result.file_path}`;
+                    const response = await fetch(directUrl);
+                    if (!response.ok) {
+                        throw new Error(`Failed to retrieve file content: ${response.statusText}`);
+                    }
+                    return await response.text();
+                }
+            } catch (error) {
+                console.error('Failed to resolve local proxy URL internally:', error);
+            }
+        }
 
         const response = await fetch(downloadUrl);
         if (!response.ok) {

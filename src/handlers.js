@@ -9,7 +9,8 @@ async function handleWebhook(request, env) {
             return new Response('Error', {status: 500});
         }
         const update = await request.json();
-        const api = new TelegramAPI(env.BOT_TOKEN);
+        const requestUrl = new URL(request.url);
+        const api = new TelegramAPI(env.BOT_TOKEN, requestUrl.origin);
 
         if (update.message) {
             await handleMessageUpdate(update.message, api, env.DB, request);
@@ -47,7 +48,7 @@ async function handleMessageUpdate(message, api, db, request) {
         const file = message.document;
         const fileName = file.file_name || '';
         const fileSize = file.file_size || 0;
-        const fileInfo = await api.request('getFile', {file_id: file.file_id});
+        const fileInfo = await api.getFile(file.file_id);
         if (!fileInfo.ok || !fileInfo.result?.file_path) {
             throw new Error('Telegram getFile returned an invalid or empty path.');
         }
@@ -269,7 +270,7 @@ async function handleInlineQueryUpdate(inlineQuery, api) {
         try {
             targetText = await api.downloadFile(mdUrl);
         } catch (err) {
-            console.error('Error downloading markdown from link in inline query:', err);
+            console.error('Error downloading markdown link in inline query:', err);
             results.push({
                 type: 'article',
                 id: 'inline_error',
@@ -380,7 +381,7 @@ async function handleFileProxy(request, env) {
 
     try {
         const api = new TelegramAPI(env.BOT_TOKEN);
-        const fileInfo = await api.request('getFile', {file_id: fileId});
+        const fileInfo = await api.getFile(fileId);
         if (!fileInfo.ok || !fileInfo.result?.file_path) {
             return new Response('File not found', {status: 404});
         }

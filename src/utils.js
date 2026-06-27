@@ -81,6 +81,20 @@ export function getMarkdownUrl(text) {
             return url.href;
         }
     } catch (e) {
+        // Not a valid URL
+    }
+    return null;
+}
+
+export function getLocalFileId(urlStr, localOrigin) {
+    if (!localOrigin) return null;
+    try {
+        const url = new URL(urlStr);
+        if (url.origin === localOrigin && url.pathname.startsWith('/file/')) {
+            return url.pathname.split('/').pop() || null;
+        }
+    } catch (e) {
+        // Ignored
     }
     return null;
 }
