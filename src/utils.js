@@ -57,7 +57,30 @@ export function getMimeType(filename, defaultType = 'application/octet-stream') 
         'js': 'application/javascript',
         'json': 'application/json',
         'md': 'text/markdown',
-        'markdown': 'text/markdown'
+        'markdown': 'text/markdown',
     };
     return mimeTypes[ext] || defaultType;
+}
+
+export function getMarkdownUrl(text) {
+    try {
+        const trimmed = (text || '').trim();
+        if (!trimmed) return null;
+        if (/\s/.test(trimmed)) return null;
+
+        const url = new URL(trimmed);
+        const pathname = url.pathname.toLowerCase();
+        const filename = url.searchParams.get('filename')?.toLowerCase() || '';
+
+        if (
+            pathname.endsWith('.md') ||
+            pathname.endsWith('.markdown') ||
+            filename.endsWith('.md') ||
+            filename.endsWith('.markdown')
+        ) {
+            return url.href;
+        }
+    } catch (e) {
+    }
+    return null;
 }

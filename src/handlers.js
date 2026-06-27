@@ -1,5 +1,5 @@
 import {TelegramAPI} from './telegram';
-import {getUserMention, getUserMentionHtml, parseRtlDirective, getMimeType} from './utils';
+import {getUserMention, getUserMentionHtml, parseRtlDirective, getMimeType, getMarkdownUrl} from './utils';
 import {getUserSettings, upsertUserSettings, toggleSetting} from './db';
 
 async function handleWebhook(request, env) {
@@ -71,7 +71,7 @@ async function handleMessageUpdate(message, api, db, request) {
                 console.error('Error downloading file:', err);
                 await api.sendMessage(chat.id, '⚠️ <b>File Download Error</b>\nCould not retrieve the content of your Markdown file.', {
                     parse_mode: 'HTML',
-                    ...options
+                    ...options,
                 });
             }
         }
@@ -81,6 +81,20 @@ async function handleMessageUpdate(message, api, db, request) {
         if (commands.some(command => text.startsWith(command))) {
             await handleCommand(chat, text, user, api, db, message);
             return;
+        }
+
+        const mdUrl = getMarkdownUrl(text);
+        if (mdUrl) {
+            try {
+                markdownText = await api.downloadFile(mdUrl);
+            } catch (err) {
+                console.error('Error downloading markdown from link:', err);
+                await api.sendMessage(chat.id, '⚠️ <b>Link Download Error</b>\nCould not retrieve the content of your Markdown file from the provided link.', {
+                    parse_mode: 'HTML',
+                    ...options,
+                });
+                return;
+            }
         } else if (chat.type === 'private') {
             markdownText = text;
         }
@@ -121,7 +135,7 @@ async function handleMessageUpdate(message, api, db, request) {
             const errorMsg = `${mentionPrefix}⚠️ <b>Markdown Parsing Error</b>\n\nTelegram was unable to parse the markdown syntax.\n\n<b>Error details:</b> <code>${escapedDetails}</code>`;
             await api.sendMessage(chat.id, errorMsg, {
                 parse_mode: 'HTML',
-                ...options
+                ...options,
             });
         }
 
@@ -249,17 +263,39 @@ async function handleInlineQueryUpdate(inlineQuery, api) {
     const queryText = inlineQuery.query.trim();
     const results = [];
 
-    const {isRtl, cleanedText} = parseRtlDirective(queryText);
+    let targetText = queryText;
+    const mdUrl = getMarkdownUrl(queryText);
+    if (mdUrl) {
+        try {
+            targetText = await api.downloadFile(mdUrl);
+        } catch (err) {
+            console.error('Error downloading markdown from link in inline query:', err);
+            results.push({
+                type: 'article',
+                id: 'inline_error',
+                title: '⚠️ Download Error',
+                description: 'Could not fetch Markdown file from link',
+                input_message_content: {
+                    message_text: '⚠️ <b>Markdown Link Error</b>\nUnable to fetch markdown content from the URL.',
+                    parse_mode: 'HTML',
+                },
+            });
+            await api.answerInlineQuery(inlineQuery.id, results);
+            return;
+        }
+    }
+
+    const {isRtl, cleanedText} = parseRtlDirective(targetText);
 
     if (cleanedText.length === 0) {
         results.push({
             type: 'article',
             id: 'instruction',
             title: 'Send Rich Message',
-            description: 'Type any markdown',
+            description: 'Type any markdown or paste a markdown file link',
             input_message_content: {
                 rich_message: {
-                    markdown: '*Hello!* Type some markdown in the query input to preview and send it as a rich message.',
+                    markdown: '*Hello!* Type some markdown or paste a `.md` file link in the query input to preview and send it as a rich message.',
                 },
             },
         });
@@ -273,7 +309,7 @@ async function handleInlineQueryUpdate(inlineQuery, api) {
             type: 'article',
             id: 'markdown_inline_block',
             title: 'Send as Rich Message',
-            description: cleanedText,
+            description: cleanedText.substring(0, 100) + (cleanedText.length > 100 ? '...' : ''),
             input_message_content: {
                 rich_message: richMessage,
             },
@@ -288,10 +324,26 @@ async function handleInlineQueryUpdate(inlineQuery, api) {
 }
 
 async function processMarkdown(chat, markdownText, userMention, message, api) {
-    const {isRtl, cleanedText} = parseRtlDirective(markdownText);
+    let targetText = markdownText;
+    const mdUrl = getMarkdownUrl(markdownText);
     const chatId = chat.id;
     const options = {};
     if (message.message_thread_id) options.message_thread_id = message.message_thread_id;
+
+    if (mdUrl) {
+        try {
+            targetText = await api.downloadFile(mdUrl);
+        } catch (err) {
+            console.error('Error downloading markdown from link in processMarkdown:', err);
+            options.parse_mode = 'HTML';
+            const htmlMention = getUserMentionHtml(message);
+            const mentionPrefix = htmlMention ? `${htmlMention}\n\n` : '';
+            await api.sendMessage(chatId, `${mentionPrefix}⚠️ <b>Link Download Error</b>\nCould not retrieve the content of your Markdown file from the provided link.`, options);
+            return;
+        }
+    }
+
+    const {isRtl, cleanedText} = parseRtlDirective(targetText);
 
     if (cleanedText.length === 0) {
         const hint = `${userMention}\n\nPlease provide some Markdown text or upload a \`.md\` file.\n\n*Example to try:* \`> <b>Quadratic Equation Solutions: <tg-math-block>\\frac{-b\\pm\\sqrt{b^2-4ac}}{2a}</tg-math-block>\``;
@@ -321,23 +373,23 @@ async function handleFileProxy(request, env) {
     const url = new URL(request.url);
     const fileId = url.pathname.split('/').pop();
     if (!fileId) {
-        return new Response('File ID is missing', { status: 400 });
+        return new Response('File ID is missing', {status: 400});
     }
 
     const filename = url.searchParams.get('filename');
 
     try {
         const api = new TelegramAPI(env.BOT_TOKEN);
-        const fileInfo = await api.request('getFile', { file_id: fileId });
+        const fileInfo = await api.request('getFile', {file_id: fileId});
         if (!fileInfo.ok || !fileInfo.result?.file_path) {
-            return new Response('File not found', { status: 404 });
+            return new Response('File not found', {status: 404});
         }
 
         const downloadUrl = `${api.fileUrl}/${fileInfo.result.file_path}`;
         const fileResponse = await fetch(downloadUrl);
 
         if (!fileResponse.ok) {
-            return new Response('Error retrieving file from Telegram', { status: fileResponse.status });
+            return new Response('Error retrieving file from Telegram', {status: fileResponse.status});
         }
 
         const responseHeaders = new Headers();
@@ -352,7 +404,7 @@ async function handleFileProxy(request, env) {
             const safeFilename = filename.replace(/"/g, '\\"');
             responseHeaders.set(
                 'Content-Disposition',
-                `inline; filename="${safeFilename}"; filename*=UTF-8''${encodeURIComponent(filename)}`
+                `inline; filename="${safeFilename}"; filename*=UTF-8''${encodeURIComponent(filename)}`,
             );
         }
 
@@ -368,7 +420,7 @@ async function handleFileProxy(request, env) {
         });
     } catch (error) {
         console.error('File proxy error:', error);
-        return new Response('Internal Server Error', { status: 500 });
+        return new Response('Internal Server Error', {status: 500});
     }
 }
 

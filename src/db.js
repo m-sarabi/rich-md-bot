@@ -17,22 +17,21 @@ export async function upsertUserSettings(db, userId, userInfo, deleteOriginal = 
 
     try {
         await db.prepare(`
-            INSERT INTO users (
-                user_id, username, first_name, last_name, language_code, is_premium,
-                delete_original, default_rtl, mention, updated_at, last_active_at
-            )
-            VALUES (?1, ?2, ?3, ?4, ?5, ?6, COALESCE(?7, 0), COALESCE(?8, 0), COALESCE(?9, 1), CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
-                ON CONFLICT(user_id) DO UPDATE SET
+            INSERT INTO users (user_id, username, first_name, last_name, language_code, is_premium,
+                               delete_original, default_rtl, mention, updated_at, last_active_at)
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6, COALESCE(?7, 0), COALESCE(?8, 0), COALESCE(?9, 1), CURRENT_TIMESTAMP,
+                    CURRENT_TIMESTAMP) ON CONFLICT(user_id) DO
+            UPDATE SET
                 username = excluded.username,
-                                            first_name = excluded.first_name,
-                                            last_name = excluded.last_name,
-                                            language_code = excluded.language_code,
-                                            is_premium = excluded.is_premium,
-                                            delete_original = COALESCE(?7, users.delete_original),
-                                            default_rtl = COALESCE(?8, users.default_rtl),
-                                            mention = COALESCE(?9, users.mention),
-                                            updated_at = CURRENT_TIMESTAMP,
-                                            last_active_at = CURRENT_TIMESTAMP
+                first_name = excluded.first_name,
+                last_name = excluded.last_name,
+                language_code = excluded.language_code,
+                is_premium = excluded.is_premium,
+                delete_original = COALESCE (?7, users.delete_original),
+                default_rtl = COALESCE (?8, users.default_rtl),
+                mention = COALESCE (?9, users.mention),
+                updated_at = CURRENT_TIMESTAMP,
+                last_active_at = CURRENT_TIMESTAMP
         `).bind(
             userId,
             username || null,
